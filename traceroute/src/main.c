@@ -3,11 +3,8 @@
  * 323129
  */
 
-#define _GNU_SOURCE
+#include "icmp.h"
 
-#include <features.h>
-#include <netinet/ip.h>
-#include <netinet/ip_icmp.h>
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,12 +13,11 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <ctype.h>
-
-#include "icmp.h"
 
 #define PACKETS_IN_ROW 3
 #define AWAIT_TIME 1
+
+u_int16_t my_pid = 0;
 
 enum select_status {
 	SELECT_ERROR,
@@ -29,28 +25,33 @@ enum select_status {
 	SELECT_SUCCESS
 };
 
-void print_ip(u_int32_t data) {
-	char ip[20];
-
-	u_int8_t block1 = data % 256;
-	u_int8_t block2 = (data >> 8) % 256; 
-	u_int8_t block3 = (data >> 16) % 256;
-	u_int8_t block4 = (data >> 24) % 256; 
-	sprintf(ip, "%d.%d.%d.%d", block1, block2, block3, block4);
-
-	printf("%s ", ip);
+void print_ip(struct sockaddr_in* ip) {
+	printf("%s ", inet_ntoa(ip->sin_addr));
 }
 
-bool correct_icmp_packet(const struct icmphdr* icmp, int cnt) {
-	return icmp->un.echo.id == getpid() && 
-		icmp->un.echo.sequence >= PACKETS_IN_ROW * cnt &&
-		icmp->un.echo.sequence < PACKETS_IN_ROW * (cnt + 1);
+int correct_icmp_packet(const struct icmphdr* icmp, int cnt) {
+
+	if (ntohs(icmp->un.echo.id) == my_pid && 
+		ntohs(icmp->un.echo.sequence) >= PACKETS_IN_ROW * cnt &&
+		ntohs(icmp->un.echo.sequence) < PACKETS_IN_ROW * (cnt + 1)) {
+			return ntohs(icmp->un.echo.sequence) % PACKETS_IN_ROW;
+		}
+
+	return -1;
 }
 
-void update_time(struct timeval* time, struct timeval* timeleft) {
-	time->tv_sec = AWAIT_TIME;
-	time->tv_usec = 0;
-	timersub(time, timeleft, time);
+void update_time(struct timeval** time, struct timeval* timeleft) {
+
+	*time = (struct timeval*)malloc(sizeof(struct timeval));
+
+	if (*time == NULL) {
+		fprintf(stderr, "Can not allocate timeval!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	(*time)->tv_sec = AWAIT_TIME;
+	(*time)->tv_usec = 0;
+	timersub(*time, timeleft, *time);
 }
 
 enum select_status await_res(int socket, struct timeval* tv) {
@@ -71,10 +72,11 @@ enum select_status await_res(int socket, struct timeval* tv) {
 }
 
 int main(int argc, char** argv) {
+
+	my_pid = getpid();
 	
 	bool always_print_times = false;
 	bool input_flag = false;
-	u_int16_t ipblocks[4];
 	int opt;
 	char ip_string[100];
 
@@ -111,8 +113,6 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	sscanf(ip_string, "%hu.%hu.%hu.%hu", ipblocks, ipblocks + 1, ipblocks + 2, ipblocks + 3);
-
 	int res = inet_pton(AF_INET, ip_string, &ip_addr_s.sin_addr);
 
 	if (res == 0) {
@@ -124,7 +124,6 @@ int main(int argc, char** argv) {
 	}
 
 	bool route_found = false;
-	u_int32_t ip_addr = ipblocks[0] | (ipblocks[1] << 8) | (ipblocks[2] << 16) | (ipblocks[3] << 24);
 
     int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sockfd < 0) {
@@ -141,7 +140,7 @@ int main(int argc, char** argv) {
 		setsockopt(sockfd, IPPROTO_IP, IP_TTL, &i, sizeof(int));
 
 		for (int j = 0; j < PACKETS_IN_ROW; j++) {
-			icmp_send_packet(sockfd, &ip_addr_s, ICMP_ECHO, 0, getpid(), (i - 1) * PACKETS_IN_ROW + j);
+			icmp_send_packet(sockfd, &ip_addr_s, ICMP_ECHO, 0, my_pid, (i - 1) * PACKETS_IN_ROW + j);
 		}
 
 		struct timeval tv;
@@ -149,7 +148,9 @@ int main(int argc, char** argv) {
 		tv.tv_usec = 0;
 		int received = 0;
 		
-		struct timeval times[PACKETS_IN_ROW];
+		struct timeval* times[PACKETS_IN_ROW];
+
+		for (int i = 0; i < PACKETS_IN_ROW; i++) times[i] = NULL;
 
 		printf("%d. ", i);
 
@@ -160,16 +161,15 @@ int main(int argc, char** argv) {
 
 			struct icmphdr* icmp_header = icmp_receive_packet(sockfd, buffer, &sender, &sender_len);
 
-			if (icmp_header->type == ICMP_TIME_EXCEEDED) {
-				u_int8_t* new_buffer = (u_int8_t*)icmp_header + sizeof(struct icmphdr);
-				icmp_header = icmp_get_header(new_buffer);
-			}
+			int packet_number = -1;
+			if ((packet_number = correct_icmp_packet(icmp_header, i - 1)) != -1) {
+				if (times[packet_number] == NULL) {
+					print_ip(&sender);
+					update_time(&times[packet_number], &tv);
+					received++;
+				}
 
-			if (correct_icmp_packet(icmp_header, i - 1)) {
-				print_ip(sender.sin_addr.s_addr);
-				update_time(&times[received++], &tv);
-
-				if (ip_addr == sender.sin_addr.s_addr) route_found = true;
+				if (icmp_header->type == ICMP_ECHOREPLY) route_found = true;
 			}
 		} while (received < PACKETS_IN_ROW);
 
@@ -177,8 +177,9 @@ int main(int argc, char** argv) {
 			printf("*\n");
 		} else if (received == PACKETS_IN_ROW || (always_print_times && received > 0)) {
 			u_int64_t total_microseconds = 0;
-			for (int i = 0; i < received; i++) {
-				total_microseconds += times[i].tv_usec;
+			for (int i = 0; i < PACKETS_IN_ROW; i++) {
+				if (times[i] != NULL)
+					total_microseconds += times[i]->tv_usec;
 			}
 			u_int64_t avarage = (total_microseconds / 1000) / received;
 
