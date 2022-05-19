@@ -70,43 +70,6 @@ enum select_status await_res(int socket, struct timeval* tv) {
 	}
 }
 
-bool validate_ip(const char* const ip_string, u_int16_t ipblocks[]) {
-
-	u_int16_t digits = 0, dots = 0;
-	size_t len = strlen(ip_string);
-	char last_sign = '\0';
-
-	if (ip_string[0] == '.')
-		return false;
-
-	for (size_t i = 0; i < len; i++) {
-		if (!isdigit(ip_string[i]) && ip_string[i] != '.')
-			return false;
-
-		if (isdigit(ip_string[i]))
-			digits++;
-
-		if (ip_string[i] == '.')
-			dots++;
-
-		if (i > 0 && ip_string[i - 1] == '.' && ip_string[i] == '.')
-			return false;
-
-		last_sign = ip_string[i];
-	}
-
-	if (last_sign == '.' || digits < 4 || dots != 3)
-		return false;
-
-	for (int i = 0; i < 4; i++) {
-		if (ipblocks[i] > 255) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
 int main(int argc, char** argv) {
 	
 	bool always_print_times = false;
@@ -114,6 +77,10 @@ int main(int argc, char** argv) {
 	u_int16_t ipblocks[4];
 	int opt;
 	char ip_string[100];
+
+	struct sockaddr_in ip_addr_s;
+	bzero(&ip_addr_s, sizeof(ip_addr_s));
+	ip_addr_s.sin_family = AF_INET;
 
 	while ((opt = getopt(argc, argv, "de:h")) != -1) {
 		if (opt == 'd') always_print_times = true;
@@ -146,9 +113,14 @@ int main(int argc, char** argv) {
 
 	sscanf(ip_string, "%hu.%hu.%hu.%hu", ipblocks, ipblocks + 1, ipblocks + 2, ipblocks + 3);
 
-	if (!validate_ip(ip_string, ipblocks)) {
+	int res = inet_pton(AF_INET, ip_string, &ip_addr_s.sin_addr);
+
+	if (res == 0) {
 		fprintf(stderr, "%s: Name or service not known\n", ip_string);
 		return EXIT_FAILURE;
+	} else if (res == -1) {
+		fprintf(stderr, "inet_pton() error: %s\n", strerror(errno));
+        return EXIT_FAILURE;
 	}
 
 	bool route_found = false;
@@ -169,7 +141,7 @@ int main(int argc, char** argv) {
 		setsockopt(sockfd, IPPROTO_IP, IP_TTL, &i, sizeof(int));
 
 		for (int j = 0; j < PACKETS_IN_ROW; j++) {
-			icmp_send_packet(sockfd, ip_string, ICMP_ECHO, 0, getpid(), (i - 1) * PACKETS_IN_ROW + j);
+			icmp_send_packet(sockfd, &ip_addr_s, ICMP_ECHO, 0, getpid(), (i - 1) * PACKETS_IN_ROW + j);
 		}
 
 		struct timeval tv;

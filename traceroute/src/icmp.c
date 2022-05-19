@@ -26,20 +26,7 @@ struct icmphdr* icmp_get_header(u_int8_t* buffer) {
 	return (struct icmphdr*) icmp_packet;
 }
 
-void icmp_send_packet(int socket, const char* dest, u_int8_t type, u_int8_t code, u_int16_t id, u_int16_t sequence) {
-
-    struct sockaddr_in recipient;
-	bzero(&recipient, sizeof(recipient));
-	recipient.sin_family = AF_INET;
-	int res = inet_pton(AF_INET, dest, &recipient.sin_addr);
-
-	if (res == 0) {
-		printf("Ivalid ip address!\n");
-		exit(EXIT_FAILURE);
-	} else if (res == -1) {
-		fprintf(stderr, "inet_pton() error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-	}
+void icmp_send_packet(int socket, struct sockaddr_in* ip_addr, u_int8_t type, u_int8_t code, u_int16_t id, u_int16_t sequence) {
 
 	struct icmp icmpheader;
 	icmpheader.icmp_type = type;
@@ -49,7 +36,7 @@ void icmp_send_packet(int socket, const char* dest, u_int8_t type, u_int8_t code
 	icmpheader.icmp_cksum = 0;
 	icmpheader.icmp_cksum = compute_icmp_checksum((u_int16_t*)&icmpheader, sizeof(struct icmp));
 
-	res = sendto(socket, &icmpheader, sizeof(icmpheader), MSG_DONTWAIT, (struct sockaddr*)&recipient, sizeof(recipient));
+	int res = sendto(socket, &icmpheader, sizeof(icmpheader), MSG_DONTWAIT, (struct sockaddr*)ip_addr, sizeof(*ip_addr));
 
 	if (res == -1) {
 		fprintf(stderr, "sendto() error: %s\n", strerror(errno));
