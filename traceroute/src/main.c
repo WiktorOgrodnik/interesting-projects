@@ -178,8 +178,9 @@ int main(int argc, char** argv) {
 		} else if (received == PACKETS_IN_ROW || (always_print_times && received > 0)) {
 			u_int64_t total_microseconds = 0;
 			for (int i = 0; i < PACKETS_IN_ROW; i++) {
-				if (times[i] != NULL)
+				if (times[i] != NULL) {
 					total_microseconds += times[i]->tv_usec;
+				}
 			}
 			u_int64_t avarage = (total_microseconds / 1000) / received;
 
@@ -187,6 +188,9 @@ int main(int argc, char** argv) {
 		} else {
 			printf("???\n");
 		}
+
+		for (int i = 0; i < PACKETS_IN_ROW; i++)
+			if (times[i] != NULL) free(times[i]);
 	}
 
     return EXIT_SUCCESS;
